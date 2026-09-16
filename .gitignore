@@ -1,0 +1,14 @@
+# Build output (published via GitHub Releases, not the repo)
+build/
+dist/
+*.spec
+
+# Bundled binaries (downloaded separately, see README)
+ffmpeg/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local job data
+matches.json
