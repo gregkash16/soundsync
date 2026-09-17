@@ -9,6 +9,7 @@ ffmpeg/
 # Python
 __pycache__/
 *.pyc
+.venv/
 
 # Local job data
 matches.json

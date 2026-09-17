@@ -7,15 +7,25 @@ which sound goes with which clip and leaves your media alone.
 
 No timecode required. Matching is done on the audio waveform.
 
-## Download (Windows)
+## Download
 
-Grab **SoundSync-Setup-\<version\>.exe** from the
+Everything is bundled — no Python or ffmpeg install required on any platform.
+Both builds are unsigned, so each OS warns once on first launch; the two lines
+below tell you the click-through.
+
+**Windows** — grab **SoundSync-Setup-\<version\>.exe** from the
 [latest release](https://github.com/gregkash16/soundsync/releases/latest) and
-run it. It installs per-user (no admin needed), adds a Start Menu entry, and
-bundles everything — no Python or ffmpeg install required. A portable zip of
-the same build is attached to each release if you'd rather not install.
+run it. It installs per-user (no admin needed) and adds a Start Menu entry. A
+portable zip of the same build is attached to each release if you'd rather not
+install. SmartScreen will warn on first run: click "More info", then
+"Run anyway".
 
-Mac: not built yet. The code is portable and the build recipe is in `build.py`.
+**Mac (Apple Silicon)** — grab **SoundSync-\<version\>.dmg** from the same
+release, open it, and drag **SoundSync** into **Applications**. On first launch
+macOS will say it "could not verify" the app: go to **System Settings →
+Privacy & Security**, scroll down, and click **Open Anyway**. That's a
+one-time step. Intel Macs aren't covered by this build — build from source
+there (see `build.py`).
 
 There are two ways to use it: **the app**, which is what most of this file is
 about, and **the command line**, which does the same work with flags.
@@ -296,8 +306,14 @@ python build.py --shortcut
 - One-folder rather than one-file on purpose: a single 300 MB exe re-extracts
   itself to a temp directory on every launch, costing 10–20 seconds each time,
   and trips antivirus far more often.
-- PyInstaller builds for the platform it runs on. This is a 64-bit Windows app;
-  a Mac build has to be made on a Mac.
+- PyInstaller builds for the platform it runs on, so a Mac build has to be
+  made on a Mac. There, the build produces `dist/SoundSync.app`, and
+  `--installer` wraps it in a drag-to-Applications `dist/SoundSync-<version>.dmg`
+  (via `hdiutil` — nothing to install). Mac notes: use a python.org or uv
+  Python 3.12+, never the Xcode/system `python3` (its Tk 8.5 renders a blank
+  window), and bundle a *static* ffmpeg/ffprobe via `--ffmpeg-dir` — Homebrew's
+  is dynamically linked and dies on any machine without Homebrew. The build
+  warns about both.
 - `--ffmpeg-dir "C:\ffmpeg\bin"` if ffmpeg isn't on your PATH.
 - The build launches its own output with `--selftest` before declaring success:
   the app imports everything, confirms it can find ffmpeg, and exits. A packaged

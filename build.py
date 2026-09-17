@@ -9,8 +9,11 @@ own.
 
     python build.py                     build it
     python build.py --shortcut          build it and put a shortcut on the Desktop
-    python build.py --installer         build it, then wrap it in a Windows installer
-                                        (dist\\SoundSync-Setup-<version>.exe)
+    python build.py --installer         build it, then wrap it in an installer:
+                                        a setup wizard on Windows
+                                        (dist\\SoundSync-Setup-<version>.exe),
+                                        a drag-to-Applications disk image on macOS
+                                        (dist/SoundSync-<version>.dmg)
     python build.py --ffmpeg-dir "C:\\ffmpeg\\bin"
     python build.py --clean             throw away build caches first
 
@@ -40,11 +43,17 @@ One-folder rather than one-file on purpose: a single 300 MB exe re-extracts
 itself to a temp directory on every launch, which costs 10-20 seconds each
 time and trips antivirus far more often.
 
---installer (Windows only) hands that folder to Inno Setup (installer.iss) and
+--installer on Windows hands that folder to Inno Setup (installer.iss) and
 produces a normal setup wizard: Start Menu entry, optional desktop shortcut,
 Add/Remove Programs listing, uninstaller. Per-user by default, so no admin
 prompt. Needs Inno Setup 6 on this machine (the build machine only --
 recipients need nothing):  winget install -e --id JRSoftware.InnoSetup
+
+--installer on macOS wraps the .app in a compressed disk image with an
+Applications shortcut next to it -- the standard Mac "installer": open the
+.dmg, drag the app across, done. Built with hdiutil, which every Mac has.
+A .dmg also survives transit intact, unlike a bare .app whose executable
+bits get stripped by most upload forms.
 """
 
 import argparse
@@ -72,6 +81,9 @@ CANDIDATE_HIDDEN = [
     "scipy._external.array_api_compat.numpy.linalg",
     "scipy._lib.array_api_compat.numpy.fft",
     "numpy.testing",
+    # scipy.stats._sobol needs this at runtime; PyInstaller's scan misses it
+    # on some Pythons.
+    "importlib.resources",
 ]
 
 # Only third-party weight. Do NOT exclude stdlib here: scipy's array-API shim
@@ -220,8 +232,9 @@ def main():
     ap.add_argument("--shortcut", action="store_true",
                     help="put a shortcut to the built app on the Desktop")
     ap.add_argument("--installer", action="store_true",
-                    help="after building, compile a Windows setup wizard with "
-                         "Inno Setup (dist\\SoundSync-Setup-<version>.exe)")
+                    help="after building, make an installer: an Inno Setup "
+                         "wizard on Windows (dist\\SoundSync-Setup-<version>.exe), "
+                         "a disk image on macOS (dist/SoundSync-<version>.dmg)")
     ap.add_argument("--no-bundle-ffmpeg", action="store_true",
                     help="build without ffmpeg inside -- the app will then need it "
                          "on PATH, which is not what most people want")
@@ -238,9 +251,10 @@ def main():
 
     iscc = None
     if args.installer:
-        if os.name != "nt":
-            die("--installer only builds Windows installers (Inno Setup).")
-        iscc = find_iscc()          # check now, not after a five-minute build
+        if os.name == "nt":
+            iscc = find_iscc()      # check now, not after a five-minute build
+        elif sys.platform != "darwin":
+            die("--installer only knows how to package for Windows and macOS.")
 
     out_dir = os.path.join(HERE, "dist", NAME)
     check_not_running(out_dir)
@@ -319,6 +333,12 @@ def main():
         print(f"\nInstaller: {setup}")
         print("Send that one file. It installs per-user (no admin prompt) with a\n"
               "Start Menu entry, an optional desktop shortcut and an uninstaller.")
+    elif args.installer and sys.platform == "darwin":
+        dmg = make_dmg(app)
+        print(f"\nInstaller: {dmg}")
+        print("Send that one file. The recipient opens it, drags SoundSync to\n"
+              "Applications, and (because the app is unsigned) allows it once under\n"
+              "System Settings > Privacy & Security > Open Anyway.")
     print("-" * 70)
     return 0
 
@@ -417,6 +437,42 @@ def make_installer(iscc, out_dir):
     size = os.path.getsize(setup) / (1024 ** 2)
     print(f"  {size:.0f} MB")
     return setup
+
+
+def make_dmg(app):
+    """
+    Wrap dist/SoundSync.app in a compressed disk image. Returns the dmg path.
+
+    Staged through a temp folder holding the app plus an /Applications
+    symlink, so the opened image shows the familiar drag-here layout. hdiutil
+    ships with macOS -- nothing to install.
+    """
+    if not os.path.isdir(app):
+        die(f"{app} isn't there -- the .app is only produced by --windowed "
+            "builds on macOS.")
+    version = app_version()
+    dmg = os.path.join(HERE, "dist", f"{NAME}-{version}.dmg")
+    if os.path.exists(dmg):
+        os.remove(dmg)
+
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="soundsync-dmg-") as stage:
+        # copytree(symlinks=True) rather than a naive copy: the .app is full
+        # of framework symlinks, and following them both bloats the image and
+        # can break code signatures.
+        shutil.copytree(app, os.path.join(stage, os.path.basename(app)),
+                        symlinks=True)
+        os.symlink("/Applications", os.path.join(stage, "Applications"))
+        print("\nCompressing the disk image (a minute or two)...")
+        result = subprocess.call(
+            ["hdiutil", "create", "-volname", f"{NAME} {version}",
+             "-srcfolder", stage, "-format", "UDZO", "-ov", "-quiet", dmg])
+    if result != 0:
+        die(f"hdiutil exited with code {result} -- see the output above.")
+    if not os.path.isfile(dmg):
+        die(f"hdiutil finished but {dmg} isn't there.")
+    print(f"  {os.path.getsize(dmg) / (1024 ** 2):.0f} MB")
+    return dmg
 
 
 def make_shortcut(exe):
