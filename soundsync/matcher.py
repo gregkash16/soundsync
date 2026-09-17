@@ -104,8 +104,11 @@ def probe(path, cancel=None):
            "-show_format", "-show_streams", path]
     res = proc.run(cmd, cancel=cancel)
     if res.returncode != 0:
-        raise RuntimeError(f"ffprobe failed: {(res.stderr or '').strip()[:200]}")
-    info = json.loads(res.stdout)
+        raise RuntimeError(proc.explain_failure(res, "ffprobe"))
+    try:
+        info = json.loads(res.stdout or "")
+    except ValueError:
+        raise RuntimeError("ffprobe returned nothing readable for this file")
 
     m = Media(path=os.path.abspath(path), name=os.path.basename(path))
     try:
@@ -369,6 +372,9 @@ def load(paths, label, jobs, report=None, cancel=None):
                 except Exception as e:                     # noqa: BLE001
                     m, why = None, f"unexpected error: {e}"
                 if m is None:
+                    # Say why right here, while the user is watching -- if
+                    # every file goes this way the run ends before the summary.
+                    report.log(f"{base}  SKIPPED: {why}", "warn")
                     skipped.append((base, why))
                 else:
                     items.append(m)
@@ -495,6 +501,20 @@ def match(videos, audios, opts, report=None, cancel=None):
     return accepted, rejected
 
 
+def _skip_summary(skipped):
+    """Why every file was dropped, grouped -- the one thing worth saying."""
+    if not skipped:
+        return ""
+    counts = {}
+    for _f, why in skipped:
+        counts[why] = counts.get(why, 0) + 1
+    top = sorted(counts.items(), key=lambda kv: -kv[1])[:3]
+    lines = [f"  {n} file(s): {why}" for why, n in top]
+    if len(counts) > len(top):
+        lines.append(f"  ...and {len(counts) - len(top)} other reason(s)")
+    return f"\n\nAll {len(skipped)} file(s) were skipped:\n" + "\n".join(lines)
+
+
 def run_match(video_dir, audio_dir, opts=None, out_path=None,
               report=None, cancel=None):
     """
@@ -518,9 +538,10 @@ def run_match(video_dir, audio_dir, opts=None, out_path=None,
     videos, vskip = load(vpaths, "video", jobs, report, cancel)
     audios, askip = load(apaths, "audio", jobs, report, cancel)
     if not videos:
-        raise ValueError("no video files had usable scratch audio -- nothing to sync against")
+        raise ValueError("no video files had usable scratch audio -- nothing to sync "
+                         "against." + _skip_summary(vskip))
     if not audios:
-        raise ValueError("no audio files could be analysed")
+        raise ValueError("no audio files could be analysed." + _skip_summary(askip))
 
     report.stage("Matching")
     accepted, rejected = match(videos, audios, opts, report, cancel)
@@ -551,8 +572,7 @@ def run_match(video_dir, audio_dir, opts=None, out_path=None,
             report.log(f"{p['video']}  <-  NO MATCH   best guess {p['audio']} "
                        f"at {p['offset']:+.3f}s, {p['reason']}", "warn")
             report.row("unmatched", p)
-    for f, r in vskip + askip:
-        report.log(f"{f}  SKIPPED: {r}", "warn")
+    for f, r in vskip + askip:          # already logged as they happened
         report.row("skipped", {"video": f, "reason": r})
 
     return data

@@ -44,6 +44,31 @@ LOG_COLOURS = {
     "stage":  "#0b3d61",
 }
 
+# The same hues lifted for dark backgrounds. Aqua's dark mode hands tk.Text a
+# near-black background, against which the palette above all but disappears.
+LOG_COLOURS_DARK = {
+    "error":  "#ff8a80",
+    "warn":   "#ffb74d",
+    "good":   "#81c784",
+    "detail": "#9e9e9e",
+    "info":   "#e8e8e8",
+    "stage":  "#64b5f6",
+}
+
+# Font families are a platform property: Segoe UI and Consolas exist only on
+# Windows, and 9pt is Windows sizing -- macOS draws its native UI at 13pt, so
+# Tk's silent fallback comes out a third smaller than everything around it.
+if sys.platform == "darwin":
+    FONT_BOLD = ("Helvetica Neue", 13, "bold")
+    FONT_MONO = ("Menlo", 12)
+elif os.name == "nt":
+    FONT_BOLD = ("Segoe UI", 9, "bold")
+    FONT_MONO = ("Consolas", 9)
+else:
+    FONT_BOLD = ("DejaVu Sans", 10, "bold")
+    FONT_MONO = ("DejaVu Sans Mono", 10)
+FONT_MONO_BOLD = FONT_MONO + ("bold",)
+
 
 def _open_folder(path):
     if not path or not os.path.isdir(path):
@@ -70,6 +95,12 @@ class App(tk.Tk):
         self.last_matches = None       # last matches dict, for re-export
         self._refresh_job = None
 
+        # Hint greys and note blues picked for a white window vanish against
+        # a dark one (macOS dark mode). Resolve the actual theme once.
+        self.dark = self._theme_is_dark()
+        self.hint = "#9e9e9e" if self.dark else "#666"
+        self.note = "#8fc1e3" if self.dark else "#234a63"
+
         self._make_vars()
         self._build_menu()
         self._build_widgets()
@@ -78,6 +109,32 @@ class App(tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(80, self._poll)
+        self.after(300, self._check_tools)
+
+    def _check_tools(self):
+        """Prove ffprobe actually runs, not just that it exists. On macOS an
+        unsigned download's bundled ffmpeg gets killed by Gatekeeper, which
+        otherwise shows up as every clip being 'skipped' with no explanation."""
+        def work():
+            problem = proc.self_test()
+            if problem:
+                self.queue.put(("log", problem, "error"))
+                self.queue.put(("box", "ffmpeg cannot run", problem))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _theme_is_dark(self):
+        """Whether the window background is dark (macOS dark mode, dark themes).
+
+        winfo_rgb resolves system colour names like Aqua's
+        systemWindowBackgroundColor to what is actually on screen.
+        """
+        try:
+            bg = (ttk.Style(self).lookup("TLabel", "background")
+                  or self.cget("background"))
+            r, g, b = self.winfo_rgb(bg)
+            return (0.2126 * r + 0.7152 * g + 0.0722 * b) < 0x8000
+        except tk.TclError:
+            return False
 
     # ------------------------------------------------------------ variables
 
@@ -168,13 +225,21 @@ class App(tk.Tk):
         outer = ttk.Frame(self, padding=PAD)
         outer.pack(fill="both", expand=True)
         outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(3, weight=1)
+        outer.rowconfigure(2, weight=1)
 
         self._build_paths(outer).grid(row=0, column=0, sticky="ew")
         self._build_strip(outer).grid(row=1, column=0, sticky="ew", pady=(PAD, 0))
-        self._build_notebook(outer).grid(row=2, column=0, sticky="ew", pady=(PAD, 0))
-        self._build_log(outer).grid(row=3, column=0, sticky="nsew", pady=(PAD, 0))
-        self._build_buttons(outer).grid(row=4, column=0, sticky="ew", pady=(PAD, 0))
+
+        # Settings above, progress log below, with a sash between them: the
+        # log is what you read when something goes wrong, so it must be able
+        # to take most of the window, not a fixed ten lines at the bottom.
+        split = ttk.PanedWindow(outer, orient="vertical")
+        split.grid(row=2, column=0, sticky="nsew", pady=(PAD, 0))
+        split.add(self._build_notebook(split), weight=0)
+        split.add(self._build_log(split), weight=1)
+        self.split = split
+
+        self._build_buttons(outer).grid(row=3, column=0, sticky="ew", pady=(PAD, 0))
 
     # ---- sources and destination ----
 
@@ -193,7 +258,7 @@ class App(tk.Tk):
         opts.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         ttk.Checkbutton(opts, text="Include sub-folders",
                         variable=self.v["recursive"]).pack(side="left")
-        self.scan_label = ttk.Label(opts, text="Not scanned yet.", foreground="#555")
+        self.scan_label = ttk.Label(opts, text="Not scanned yet.", foreground=self.hint)
         self.scan_label.pack(side="left", padx=(16, 0))
         return f
 
@@ -242,7 +307,7 @@ class App(tk.Tk):
 
     def _build_strip(self, parent):
         self.strip = tk.Label(parent, text="", anchor="w", padx=10, pady=6,
-                              font=("Segoe UI", 9, "bold"), relief="flat")
+                              font=FONT_BOLD, relief="flat")
         self._set_strip(compat.OK, "Pick your folders, then press Scan.")
         return self.strip
 
@@ -267,7 +332,7 @@ class App(tk.Tk):
         f = ttk.Frame(parent, padding=PAD)
         f.columnconfigure(1, weight=1)
 
-        ttk.Label(f, text="What to produce", font=("Segoe UI", 9, "bold")) \
+        ttk.Label(f, text="What to produce", font=FONT_BOLD) \
             .grid(row=0, column=0, columnspan=3, sticky="w")
 
         ttk.Checkbutton(f, text="Premiere sequences (XML)  -- references your "
@@ -285,7 +350,7 @@ class App(tk.Tk):
         ttk.Entry(f, textvariable=self.v["clips_subfolder"], width=30) \
             .grid(row=4, column=1, sticky="w", padx=6)
         ttk.Label(f, text="(blank = straight into the destination folder)",
-                  foreground="#666").grid(row=4, column=2, sticky="w")
+                  foreground=self.hint).grid(row=4, column=2, sticky="w")
 
         ttk.Checkbutton(f, text="Pairing list (CSV)  -- which sound goes with which "
                                 "clip, and how sure",
@@ -295,7 +360,7 @@ class App(tk.Tk):
         ttk.Entry(f, textvariable=self.v["csv_name"], width=30) \
             .grid(row=6, column=1, sticky="w", padx=6)
         ttk.Label(f, text="(video, best sound, %, second choice, %)",
-                  foreground="#666").grid(row=6, column=2, sticky="w")
+                  foreground=self.hint).grid(row=6, column=2, sticky="w")
 
         ttk.Label(f, text="Match report filename").grid(row=7, column=0, sticky="w",
                                                         pady=(10, 0))
@@ -305,7 +370,7 @@ class App(tk.Tk):
         ttk.Label(f, text="Tick as many as you like -- one analysis pass feeds them "
                           "all. Tick none and it is a match-only run: it works out "
                           "the pairings, shows them on the Results tab, and touches "
-                          "none of your media.", foreground="#666", wraplength=640,
+                          "none of your media.", foreground=self.hint, wraplength=640,
                   justify="left") \
             .grid(row=8, column=0, columnspan=3, sticky="w", pady=(10, 0))
         return f
@@ -318,7 +383,7 @@ class App(tk.Tk):
         ttk.Spinbox(f, from_=0, to=60, increment=0.5, width=8,
                     textvariable=self.v["min_z"]).grid(row=0, column=1, sticky="w", padx=6)
         ttk.Label(f, text="True syncs score 20-40. Unrelated pairs rarely clear 9. "
-                          "Default 12.", foreground="#666") \
+                          "Default 12.", foreground=self.hint) \
             .grid(row=0, column=2, columnspan=2, sticky="w")
 
         ttk.Label(f, text="Minimum prominence").grid(row=1, column=0, sticky="w", pady=(6, 0))
@@ -326,14 +391,14 @@ class App(tk.Tk):
                     textvariable=self.v["min_prominence"]) \
             .grid(row=1, column=1, sticky="w", padx=6, pady=(6, 0))
         ttk.Label(f, text="How far the winning alignment must stand above the "
-                          "runner-up.", foreground="#666") \
+                          "runner-up.", foreground=self.hint) \
             .grid(row=1, column=2, columnspan=2, sticky="w", pady=(6, 0))
 
         ttk.Label(f, text="Decode workers").grid(row=2, column=0, sticky="w", pady=(6, 0))
         ttk.Spinbox(f, from_=0, to=32, width=8, textvariable=self.v["match_jobs"]) \
             .grid(row=2, column=1, sticky="w", padx=6, pady=(6, 0))
         ttk.Label(f, text="0 = one per core (capped at 8). Decoding is the slow part.",
-                  foreground="#666").grid(row=2, column=2, columnspan=2, sticky="w",
+                  foreground=self.hint).grid(row=2, column=2, columnspan=2, sticky="w",
                                           pady=(6, 0))
 
         ttk.Checkbutton(f, text="Each audio file may back only one video "
@@ -341,7 +406,7 @@ class App(tk.Tk):
                         variable=self.v["one_to_one"]) \
             .grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 0))
         ttk.Label(f, text="Off by default, so one continuous recorder roll can cover "
-                          "several takes.", foreground="#666") \
+                          "several takes.", foreground=self.hint) \
             .grid(row=4, column=0, columnspan=4, sticky="w", padx=(24, 0))
 
         ttk.Separator(f, orient="horizontal").grid(row=5, column=0, columnspan=4,
@@ -350,7 +415,7 @@ class App(tk.Tk):
                    command=self._run_diagnose).grid(row=6, column=0, sticky="w")
         ttk.Label(f, text="Prints every audio stream in every file with its peak "
                           "level -- use it when clips are being skipped.",
-                  foreground="#666").grid(row=6, column=1, columnspan=3, sticky="w",
+                  foreground=self.hint).grid(row=6, column=1, columnspan=3, sticky="w",
                                           padx=6)
         return f
 
@@ -358,7 +423,7 @@ class App(tk.Tk):
         f = ttk.Frame(parent, padding=PAD)
         f.columnconfigure(2, weight=1)
 
-        ttk.Label(f, text="Bin structure", font=("Segoe UI", 9, "bold")) \
+        ttk.Label(f, text="Bin structure", font=FONT_BOLD) \
             .grid(row=0, column=0, columnspan=3, sticky="w")
         for i, (val, text, why) in enumerate([
             ("subbins", "VIDEO / AUDIO / SEQUENCES sub-bins",
@@ -370,7 +435,7 @@ class App(tk.Tk):
         ]):
             ttk.Radiobutton(f, text=text, value=val, variable=self.v["structure"]) \
                 .grid(row=1 + i * 2, column=0, columnspan=3, sticky="w", pady=(6, 0))
-            ttk.Label(f, text=why, foreground="#666") \
+            ttk.Label(f, text=why, foreground=self.hint) \
                 .grid(row=2 + i * 2, column=0, columnspan=3, sticky="w", padx=(24, 0))
 
         ttk.Separator(f, orient="horizontal").grid(row=7, column=0, columnspan=3,
@@ -392,7 +457,7 @@ class App(tk.Tk):
                                                          sticky="w")
         ttk.Label(f, text="Anchors each recorder roll on its own hour, so Merge Clips "
                           "by Timecode and batch multicam both line up exactly.",
-                  foreground="#666").grid(row=11, column=0, columnspan=3, sticky="w",
+                  foreground=self.hint).grid(row=11, column=0, columnspan=3, sticky="w",
                                           padx=(24, 0))
         ttk.Checkbutton(f, text="Include the camera scratch audio on a muted track",
                         variable=self.v["xml_keep_cam"]) \
@@ -406,7 +471,7 @@ class App(tk.Tk):
         f = ttk.Frame(parent, padding=PAD)
         f.columnconfigure(1, weight=1)
 
-        ttk.Label(f, text="Export format", font=("Segoe UI", 9, "bold")) \
+        ttk.Label(f, text="Export format", font=FONT_BOLD) \
             .grid(row=0, column=0, columnspan=3, sticky="w")
 
         ttk.Label(f, text="Video").grid(row=1, column=0, sticky="w", pady=(6, 0))
@@ -426,11 +491,11 @@ class App(tk.Tk):
                      values=list(clipmod.AUDIO_CODECS.values())) \
             .grid(row=3, column=1, sticky="w", padx=6, pady=(6, 0))
 
-        self.codec_note = ttk.Label(f, text="", foreground="#444", wraplength=820,
+        self.codec_note = ttk.Label(f, text="", foreground=self.hint, wraplength=820,
                                     justify="left")
         self.codec_note.grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
-        self.size_note = ttk.Label(f, text="", foreground="#234a63", wraplength=820,
+        self.size_note = ttk.Label(f, text="", foreground=self.note, wraplength=820,
                                    justify="left")
         self.size_note.grid(row=5, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
@@ -463,7 +528,7 @@ class App(tk.Tk):
 
         ttk.Label(f, text="Verification is what catches the wrapper faults that leave "
                           "a file looking perfect and playing broken. Leave it on "
-                          "unless you are in a hurry.", foreground="#666",
+                          "unless you are in a hurry.", foreground=self.hint,
                   wraplength=820, justify="left") \
             .grid(row=8 + len(checks), column=0, columnspan=3, sticky="w", pady=(8, 0))
         return f
@@ -474,7 +539,7 @@ class App(tk.Tk):
         f.rowconfigure(1, weight=1)
 
         ttk.Label(f, text="What these settings will do to your footage. Scan your "
-                          "source folders to fill this in.", foreground="#444") \
+                          "source folders to fill this in.", foreground=self.hint) \
             .grid(row=0, column=0, sticky="w", pady=(0, 6))
 
         cols = ("level", "title", "files", "evidence")
@@ -532,24 +597,28 @@ class App(tk.Tk):
 
         self.progress = ttk.Progressbar(f, mode="determinate", maximum=100)
         self.progress.grid(row=0, column=0, sticky="ew")
-        self.status = ttk.Label(f, text="Ready.", foreground="#333")
+        self.status = ttk.Label(f, text="Ready.")
         self.status.grid(row=1, column=0, sticky="w", pady=(4, 4))
 
         wrap = ttk.Frame(f)
         wrap.grid(row=2, column=0, sticky="nsew")
         wrap.columnconfigure(0, weight=1)
         wrap.rowconfigure(0, weight=1)
-        self.log = tk.Text(wrap, height=10, wrap="none", relief="solid", borderwidth=1,
-                           font=("Consolas", 9), padx=6, pady=4)
+        # Background pinned rather than themed, so it always agrees with
+        # whichever palette we picked.
+        colours = LOG_COLOURS_DARK if self.dark else LOG_COLOURS
+        self.log = tk.Text(wrap, height=14, wrap="word", relief="solid", borderwidth=1,
+                           font=FONT_MONO, padx=6, pady=4,
+                           background="#1e1e1e" if self.dark else "#ffffff",
+                           foreground=colours["info"],
+                           insertbackground=colours["info"])
         self.log.grid(row=0, column=0, sticky="nsew")
         ysb = ttk.Scrollbar(wrap, orient="vertical", command=self.log.yview)
         ysb.grid(row=0, column=1, sticky="ns")
-        xsb = ttk.Scrollbar(wrap, orient="horizontal", command=self.log.xview)
-        xsb.grid(row=1, column=0, sticky="ew")
-        self.log.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
-        for level, colour in LOG_COLOURS.items():
+        self.log.configure(yscrollcommand=ysb.set)
+        for level, colour in colours.items():
             self.log.tag_configure(level, foreground=colour)
-        self.log.tag_configure("stage", font=("Consolas", 9, "bold"))
+        self.log.tag_configure("stage", font=FONT_MONO_BOLD)
         self.log.configure(state="disabled")
         return f
 
@@ -1095,7 +1164,10 @@ def _tooltip(widget, text):
         win = tk.Toplevel(widget)
         win.wm_overrideredirect(True)
         win.wm_geometry(f"+{x}+{y}")
-        tk.Label(win, text=text, background="#ffffe0", relief="solid", borderwidth=1,
+        # Both colours pinned: in dark mode the default label text is white,
+        # which would vanish against the pinned yellow.
+        tk.Label(win, text=text, background="#ffffe0", foreground="#000000",
+                 relief="solid", borderwidth=1,
                  justify="left", padx=6, pady=3, wraplength=420).pack()
         tip["win"] = win
 

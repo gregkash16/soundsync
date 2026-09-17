@@ -110,6 +110,61 @@ def _missing_message():
             f"ffprobe{EXE} into:\n  " + os.path.join(app_dir(), "ffmpeg"))
 
 
+def app_bundle():
+    """The .app this process runs from on macOS, or None."""
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return None
+    exe = os.path.abspath(sys.executable)          # .../SoundSync.app/Contents/MacOS/SoundSync
+    app = os.path.normpath(os.path.join(exe, "..", "..", ".."))
+    return app if app.endswith(".app") else None
+
+
+def explain_failure(res, tool):
+    """
+    Turn a failed ffmpeg/ffprobe result into a message that says what to do.
+
+    Two macOS failures look like "nothing happened" from the outside and used
+    to surface as every single clip being skipped:
+
+    * Gatekeeper kills an unsigned, quarantined binary with SIGKILL before it
+      runs. The .app itself gets waved through by "Open Anyway", but the
+      ffmpeg copies inside it are separate executables and stay blocked.
+    * Privacy & Security denies the file read ("Operation not permitted") when
+      the app, or the Terminal it was launched from, has no access to the
+      folder (Desktop, Documents, external drives).
+    """
+    err = (res.stderr or "")
+    if isinstance(err, bytes):
+        err = err.decode("utf-8", "replace")
+    err = err.strip()
+    if sys.platform == "darwin":
+        if res.returncode in (-9, 137) and not err:
+            app = app_bundle() or "/Applications/SoundSync.app"
+            return (f"{tool} was killed by macOS Gatekeeper before it could run -- this "
+                    "app is unsigned, so the copy inside it is still quarantined from the "
+                    "download. Fix it once in Terminal, then relaunch:\n"
+                    f'  xattr -dr com.apple.quarantine "{app}"')
+        if "Operation not permitted" in err:
+            return (f"{tool} was not allowed to read the file: macOS Privacy & Security is "
+                    "blocking access to that folder. Give Sound Syncing (or the Terminal "
+                    "you launched it from) access to the folder, or Full Disk Access, "
+                    "under System Settings > Privacy & Security, then relaunch.")
+    return f"{tool} failed: {err[:200]}" if err else f"{tool} failed (exit code {res.returncode})"
+
+
+def self_test():
+    """Run ffprobe once. None if it works, otherwise a message for the user."""
+    try:
+        res = run([ffprobe(), "-version"], timeout=20)
+    except ToolsMissing as e:
+        return str(e)
+    except OSError as e:
+        return f"ffprobe could not be started: {e}"
+    if res.returncode != 0:
+        return explain_failure(res, "ffprobe")
+    return None
+
+
 def tools_report():
     """(ok, lines) describing what was found -- shown in the GUI's About box."""
     lines, ok = [], True
