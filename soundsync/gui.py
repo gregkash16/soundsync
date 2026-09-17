@@ -110,6 +110,19 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(80, self._poll)
         self.after(300, self._check_tools)
+        self.after(120, self._place_sash)
+
+    def _place_sash(self):
+        """Give the log a real share of the window on first draw. Left alone,
+        the paned window hands the notebook its full requested height (the
+        tallest tab) and the log ends up one line high."""
+        self.update_idletasks()
+        total = self.split.winfo_height()
+        if total < 200:                      # not laid out yet
+            self.after(120, self._place_sash)
+            return
+        top = self.nametowidget(self.split.panes()[0]).winfo_reqheight()
+        self.split.sashpos(0, min(top, int(total * 0.55)))
 
     def _check_tools(self):
         """Prove ffprobe actually runs, not just that it exists. On macOS an
