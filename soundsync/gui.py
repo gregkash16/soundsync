@@ -35,6 +35,16 @@ LEVEL_COLOURS = {
     compat.OK:       ("#1b5e20", "#edf7ed"),
 }
 
+# The same verdicts on a dark window: bright text on a faint tint of the
+# same hue, so the Compatibility rows and the banner stay legible.
+LEVEL_COLOURS_DARK = {
+    compat.SEVERE:   ("#ff8a80", "#3a1a1e"),
+    compat.WARN:     ("#ffb74d", "#3a2c14"),
+    compat.UNTESTED: ("#b0aef0", "#26264a"),
+    compat.NOTE:     ("#8fc1e3", "#1c2f3d"),
+    compat.OK:       ("#81c784", "#1d3320"),
+}
+
 LOG_COLOURS = {
     "error":  "#b3261e",
     "warn":   "#8a5300",
@@ -100,6 +110,9 @@ class App(tk.Tk):
         self.dark = self._theme_is_dark()
         self.hint = "#9e9e9e" if self.dark else "#666"
         self.note = "#8fc1e3" if self.dark else "#234a63"
+        self.levels = LEVEL_COLOURS_DARK if self.dark else LEVEL_COLOURS
+        self.colours = LOG_COLOURS_DARK if self.dark else LOG_COLOURS
+        self.text_bg = "#1e1e1e" if self.dark else "#ffffff"
 
         self._make_vars()
         self._build_menu()
@@ -325,7 +338,7 @@ class App(tk.Tk):
         return self.strip
 
     def _set_strip(self, level, text):
-        fg, bg = LEVEL_COLOURS.get(level, LEVEL_COLOURS[compat.NOTE])
+        fg, bg = self.levels.get(level, self.levels[compat.NOTE])
         self.strip.configure(text=text, foreground=fg, background=bg)
 
     # ---- tabs ----
@@ -566,13 +579,16 @@ class App(tk.Tk):
         sb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
         sb.grid(row=1, column=1, sticky="ns")
         tree.configure(yscrollcommand=sb.set)
-        for level, (fg, bg) in LEVEL_COLOURS.items():
+        for level, (fg, bg) in self.levels.items():
             tree.tag_configure(level, foreground=fg, background=bg)
         tree.bind("<<TreeviewSelect>>", self._on_finding_selected)
         self.compat_tree = tree
 
         self.compat_detail = tk.Text(f, height=9, wrap="word", relief="solid",
-                                     borderwidth=1, padx=8, pady=6)
+                                     borderwidth=1, padx=8, pady=6,
+                                     background=self.text_bg,
+                                     foreground=self.colours["info"],
+                                     insertbackground=self.colours["info"])
         self.compat_detail.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.compat_detail.configure(state="disabled")
         self.findings = []
@@ -595,9 +611,9 @@ class App(tk.Tk):
         sb = ttk.Scrollbar(f, orient="vertical", command=tree.yview)
         sb.grid(row=0, column=1, sticky="ns")
         tree.configure(yscrollcommand=sb.set)
-        tree.tag_configure("ok", foreground="#1b5e20")
-        tree.tag_configure("bad", foreground="#b3261e")
-        tree.tag_configure("warn", foreground="#8a5300")
+        tree.tag_configure("ok", foreground=self.colours["good"])
+        tree.tag_configure("bad", foreground=self.colours["error"])
+        tree.tag_configure("warn", foreground=self.colours["warn"])
         self.results_tree = tree
         return f
 
@@ -619,10 +635,10 @@ class App(tk.Tk):
         wrap.rowconfigure(0, weight=1)
         # Background pinned rather than themed, so it always agrees with
         # whichever palette we picked.
-        colours = LOG_COLOURS_DARK if self.dark else LOG_COLOURS
+        colours = self.colours
         self.log = tk.Text(wrap, height=14, wrap="word", relief="solid", borderwidth=1,
                            font=FONT_MONO, padx=6, pady=4,
-                           background="#1e1e1e" if self.dark else "#ffffff",
+                           background=self.text_bg,
                            foreground=colours["info"],
                            insertbackground=colours["info"])
         self.log.grid(row=0, column=0, sticky="nsew")
