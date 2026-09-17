@@ -13,3 +13,4 @@ __pycache__/
 
 # Local job data
 matches.json
+.DS_Store
